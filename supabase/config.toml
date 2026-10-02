@@ -1,0 +1,22 @@
+project_id = "sistema-fernandes"
+[auth]
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173/definir-senha", "http://127.0.0.1:5173/definir-senha"]
+enable_signup = false
+minimum_password_length = 12
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+secure_password_change_enabled = true
+[functions.invite-student]
+# JWT is verified inside the handler via Auth.getUser.
+verify_jwt = false
+
+[functions.username-login]
+verify_jwt = false
+[functions.create-student]
+verify_jwt = false
+[functions.reset-student-password]
+verify_jwt = false
+[functions.change-password]
+verify_jwt = false

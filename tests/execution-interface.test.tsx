@@ -1,0 +1,28 @@
+// @vitest-environment jsdom
+import { afterEach,beforeEach,it,expect,vi } from 'vitest';
+import {render,screen,cleanup,waitFor} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {ExecutionHome} from '../src/modules/execution/ExecutionHome';
+import {ExecutionPanel} from '../src/modules/execution/ExecutionPanel';
+import {type Execution} from '../src/modules/execution/api';
+const mocks=vi.hoisted(()=>({getExecution:vi.fn(),latestExecution:vi.fn(),startExecution:vi.fn(),saveSet:vi.fn(),finishExecution:vi.fn(),listPrograms:vi.fn(),getProgramRevision:vi.fn()}));
+vi.mock('../src/modules/execution/api',async original=>({...await original<object>(),...mocks}));
+vi.mock('../src/modules/programs/api',async original=>({...await original<object>(),listPrograms:mocks.listPrograms,getProgramRevision:mocks.getProgramRevision}));
+const source={id:'source',exercise_id:'ex1',position:1,sets:3,repetitions:'8–10',rest_seconds:60,coach_notes:'Controle',exercise:{name:'Supino',instructions:'Orientações',image_path:null,video_url:''}};
+function session():Execution{return {id:'session1',student_id:'student1',program_id:'program1',program_version:2,workout_version:1,status:'in_progress',version:1,started_at:'2026-01-01T10:00:00Z',ended_at:null,summary:null,snapshot:{program_name:'Ciclo inicial',program_start_date:'2026-01-01',entry:{id:'entry',label:'Treino A',position:1,workout_id:'workout',workout_version:1,workout:{name:'Peito',instructions:'',items:[source]}}},items:[{id:'item',exercise_id:'ex1',position:1,snapshot:source,sets:[1,2,3].map(n=>({id:'set'+n,item_id:'item',set_number:n,prescribed_repetitions:'8–10',status:'pending',actual_repetitions:null,load_kg:null,load_unit:'kg',recorded_at:null,version:0}))}]};}
+beforeEach(()=>{mocks.getExecution.mockResolvedValue(session());mocks.latestExecution.mockResolvedValue({id:'session1',status:'in_progress'});mocks.listPrograms.mockResolvedValue([{id:'program1',name:'Ciclo inicial',start_date:'2026-01-01',status:'active',version:2}]);mocks.getProgramRevision.mockResolvedValue({snapshot:{name:'Ciclo inicial',start_date:'2026-01-01',status:'active',entries:[session().snapshot.entry]}});});
+afterEach(()=>{cleanup();vi.resetAllMocks();});
+
+it('resumes the same session without creating another and exposes no set inputs',async()=>{
+ const props={studentId:'student1',onDirty:vi.fn()};const first=render(<ExecutionHome {...props}/>);await userEvent.click(await screen.findByRole('button',{name:'Continuar treino'}));await screen.findByText('TREINO EM ANDAMENTO');expect(screen.queryByLabelText('Repetições realizadas')).toBeNull();expect(screen.queryByRole('button',{name:'Salvar série'})).toBeNull();expect(screen.getByText(/3 séries/)).toBeTruthy();first.unmount();render(<ExecutionHome {...props}/>);await userEvent.click(await screen.findByRole('button',{name:'Continuar treino'}));await screen.findByText('TREINO EM ANDAMENTO');expect(mocks.startExecution).not.toHaveBeenCalled();
+});
+it.each(['Concluí o treino','Não consegui concluir'])('saves only final feedback: %s',async(label)=>{
+ const user=userEvent.setup(),closed=session();closed.status=label==='Concluí o treino'?'completed':'not_completed';closed.difficulty='balanced';closed.feedback='Meu comentário';closed.duration_seconds=125;closed.ended_at='2026-01-01T10:02:05Z';mocks.finishExecution.mockResolvedValue(closed);
+ render(<ExecutionPanel initial={session()} onExit={vi.fn()} onDirty={vi.fn()}/>);await user.click(screen.getByRole('button',{name:'Finalizar treino'}));expect(mocks.finishExecution).not.toHaveBeenCalled();await user.click(screen.getByLabelText(label));await user.click(screen.getByLabelText('Na medida'));await user.type(screen.getByRole('textbox'),'Meu comentário');await user.click(screen.getByRole('button',{name:'Enviar feedback'}));await screen.findByText('Treino salvo no seu histórico.');expect(mocks.finishExecution).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({id:'session1'}),closed.status,'balanced','Meu comentário');expect(screen.queryByRole('textbox')).toBeNull();expect(screen.getByText(/2 min 5 s/)).toBeTruthy();
+});
+it('retains feedback and request ID after an uncertain response',async()=>{
+ const user=userEvent.setup();mocks.finishExecution.mockRejectedValue(new Error('Resposta incerta'));render(<ExecutionPanel initial={session()} onExit={vi.fn()} onDirty={vi.fn()}/>);await user.click(screen.getByRole('button',{name:'Finalizar treino'}));await user.click(screen.getByLabelText('Não consegui concluir'));await user.click(screen.getByLabelText('Difícil'));await user.click(screen.getByRole('button',{name:'Enviar feedback'}));await screen.findByRole('alert');await user.click(screen.getByRole('button',{name:'Enviar feedback'}));await waitFor(()=>expect(mocks.finishExecution).toHaveBeenCalledTimes(2));expect(mocks.finishExecution.mock.calls[0]).toEqual(mocks.finishExecution.mock.calls[1]);
+});
+it('starts using the same request after retry',async()=>{
+ const user=userEvent.setup();mocks.latestExecution.mockResolvedValue(null);mocks.startExecution.mockRejectedValueOnce(new Error('Resposta incerta')).mockResolvedValue('session1');render(<ExecutionHome studentId="student1" onDirty={vi.fn()}/>);await user.click(await screen.findByText('Treino A · Peito'));await user.click(screen.getByRole('button',{name:'Iniciar Treino A · Peito'}));await screen.findByRole('alert');await user.click(screen.getByRole('button',{name:'Iniciar Treino A · Peito'}));await screen.findByText('TREINO EM ANDAMENTO');expect(mocks.startExecution.mock.calls[0]).toEqual(mocks.startExecution.mock.calls[1]);
+});
